@@ -12,6 +12,7 @@ import android.hardware.SensorManager
 import android.text.format.DateFormat
 import android.view.MotionEvent
 import android.view.View
+import android.widget.Toast
 import androidx.core.content.getSystemService
 import kotlin.math.min
 
@@ -24,7 +25,13 @@ class TipsyGameView(context: Context) : View(context), SensorEventListener {
     private var gravityY = 0f
 
     private val leaderboardStore = LeaderboardStore(context)
-    private var history: List<RaceHistoryEntry> = leaderboardStore.loadHistory()
+    private var history: List<RaceHistoryEntry> = runCatching { leaderboardStore.loadHistory() }.getOrElse {
+        reportError("Leaderboard load failed", it)
+        emptyList()
+    }
+    private var fatalErrorMessage: String? = null
+    private var lastErrorToastAtMs = 0L
+    private var lastErrorToastText = ""
 
     private var lastFrameNanos = System.nanoTime()
 
@@ -69,13 +76,24 @@ class TipsyGameView(context: Context) : View(context), SensorEventListener {
         super.onSizeChanged(w, h, oldw, oldh)
         if (w <= 0 || h <= 0) return
         pxPerMeter = min(w, h) / 12f
-        world = GameWorld(
-            widthMeters = w / pxPerMeter,
-            heightMeters = h / pxPerMeter,
-            seed = 20260731
-        ) { entry ->
-            leaderboardStore.append(entry)
-            history = leaderboardStore.loadHistory()
+        runCatching {
+            GameWorld(
+                widthMeters = w / pxPerMeter,
+                heightMeters = h / pxPerMeter,
+                seed = 20260731
+            ) { entry ->
+                runCatching {
+                    leaderboardStore.append(entry)
+                    history = leaderboardStore.loadHistory()
+                }.onFailure { reportError("Leaderboard save failed", it) }
+            }
+        }.onSuccess {
+            world = it
+            fatalErrorMessage = null
+        }.onFailure {
+            world = null
+            fatalErrorMessage = "Game failed to initialize. Please restart and report this issue."
+            reportError("Game initialization failed", it)
         }
     }
 
@@ -83,58 +101,69 @@ class TipsyGameView(context: Context) : View(context), SensorEventListener {
         super.onDraw(canvas)
         canvas.drawColor(Color.rgb(14, 17, 22))
 
+        fatalErrorMessage?.let {
+            textPaint.textSize = 32f
+            canvas.drawText(it, 24f, height * 0.5f, textPaint)
+            return
+        }
+
         val game = world ?: return
         val now = System.nanoTime()
         val dt = ((now - lastFrameNanos) / 1_000_000_000f).coerceIn(1f / 240f, 1f / 20f)
         lastFrameNanos = now
 
-        game.step(dt, gravityX, gravityY)
-        val state = game.renderState()
+        runCatching {
+            game.step(dt, gravityX, gravityY)
+            game.renderState()
+        }.onFailure {
+            fatalErrorMessage = "Simulation error. Please restart and share the toast details."
+            reportError("Physics simulation failed", it)
+            invalidate()
+        }.onSuccess { state ->
+            drawLoop(canvas, state.outerLoop, trackPaint)
+            drawLoop(canvas, state.innerLoop, innerTrackPaint)
 
-        drawLoop(canvas, state.outerLoop, trackPaint)
-        drawLoop(canvas, state.innerLoop, innerTrackPaint)
-
-        val hazardPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(93, 102, 120)
-            style = Paint.Style.FILL
-        }
-        for ((center, radius) in state.rocks) {
-            canvas.drawCircle(toPxX(center.x), toPxY(center.y), radius * pxPerMeter, hazardPaint)
-        }
-        hazardPaint.color = Color.rgb(114, 130, 157)
-        for ((center, radius) in state.bumps) {
-            canvas.drawCircle(toPxX(center.x), toPxY(center.y), radius * pxPerMeter, hazardPaint)
-        }
-
-        if (state.horseshoe.size >= 2) {
-            val horseshoePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.rgb(166, 122, 90)
-                style = Paint.Style.STROKE
-                strokeWidth = 6f
+            val hazardPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(93, 102, 120)
+                style = Paint.Style.FILL
             }
-            val path = Path()
-            val first = state.horseshoe.first()
-            path.moveTo(toPxX(first.x), toPxY(first.y))
-            state.horseshoe.drop(1).forEach { path.lineTo(toPxX(it.x), toPxY(it.y)) }
-            canvas.drawPath(path, horseshoePaint)
+            for ((center, radius) in state.rocks) {
+                canvas.drawCircle(toPxX(center.x), toPxY(center.y), radius * pxPerMeter, hazardPaint)
+            }
+            hazardPaint.color = Color.rgb(114, 130, 157)
+            for ((center, radius) in state.bumps) {
+                canvas.drawCircle(toPxX(center.x), toPxY(center.y), radius * pxPerMeter, hazardPaint)
+            }
+
+            if (state.horseshoe.size >= 2) {
+                val horseshoePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.rgb(166, 122, 90)
+                    style = Paint.Style.STROKE
+                    strokeWidth = 6f
+                }
+                val path = Path()
+                val first = state.horseshoe.first()
+                path.moveTo(toPxX(first.x), toPxY(first.y))
+                state.horseshoe.drop(1).forEach { path.lineTo(toPxX(it.x), toPxY(it.y)) }
+                canvas.drawPath(path, horseshoePaint)
+            }
+
+            state.balls.forEach {
+                ballPaint.color = it.color
+                canvas.drawCircle(toPxX(it.position.x), toPxY(it.position.y), it.radius * pxPerMeter, ballPaint)
+                textPaint.textSize = 24f
+                canvas.drawText("${it.id + 1}", toPxX(it.position.x) - 8f, toPxY(it.position.y) + 7f, textPaint)
+            }
+
+            state.signals.forEach {
+                val alpha = (255f * (it.ttlSeconds / 1f).coerceIn(0f, 1f)).toInt()
+                signalPaint.alpha = alpha
+                canvas.drawText(it.text, toPxX(it.position.x), toPxY(it.position.y), signalPaint)
+            }
+
+            drawHud(canvas, state)
+            postInvalidateOnAnimation()
         }
-
-        state.balls.forEach {
-            ballPaint.color = it.color
-            canvas.drawCircle(toPxX(it.position.x), toPxY(it.position.y), it.radius * pxPerMeter, ballPaint)
-            textPaint.textSize = 24f
-            canvas.drawText("${it.id + 1}", toPxX(it.position.x) - 8f, toPxY(it.position.y) + 7f, textPaint)
-        }
-
-        state.signals.forEach {
-            val alpha = (255f * (it.ttlSeconds / 1f).coerceIn(0f, 1f)).toInt()
-            signalPaint.alpha = alpha
-            canvas.drawText(it.text, toPxX(it.position.x), toPxY(it.position.y), signalPaint)
-        }
-
-        drawHud(canvas, state)
-
-        postInvalidateOnAnimation()
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -196,4 +225,16 @@ class TipsyGameView(context: Context) : View(context), SensorEventListener {
 
     private fun toPxX(worldX: Float): Float = worldX * pxPerMeter
     private fun toPxY(worldY: Float): Float = worldY * pxPerMeter
+
+    private fun reportError(prefix: String, throwable: Throwable) {
+        val detail = throwable.message?.take(80)?.ifBlank { null } ?: throwable::class.java.simpleName
+        val toastText = "$prefix: $detail"
+        val nowMs = System.currentTimeMillis()
+        val isNewMessage = toastText != lastErrorToastText
+        if (isNewMessage || nowMs - lastErrorToastAtMs > 2_500L) {
+            lastErrorToastAtMs = nowMs
+            lastErrorToastText = toastText
+            Toast.makeText(context, toastText, Toast.LENGTH_LONG).show()
+        }
+    }
 }

@@ -9,7 +9,6 @@ import org.jbox2d.collision.WorldManifold
 import org.jbox2d.collision.shapes.ChainShape
 import org.jbox2d.collision.shapes.CircleShape
 import org.jbox2d.collision.shapes.EdgeShape
-import org.jbox2d.collision.shapes.PolygonShape
 import org.jbox2d.common.Vec2
 import org.jbox2d.dynamics.Body
 import org.jbox2d.dynamics.BodyDef
@@ -335,7 +334,17 @@ class GameWorld(
     private fun addLoopBoundary(points: List<Vec2>) {
         val body = world.createBody(BodyDef().apply { type = BodyType.STATIC })
         val shape = ChainShape()
-        val vertices = Array(points.size) { i -> points[i] }
+        val first = points.first()
+        val last = points.last()
+        val isClosedWithDuplicate = points.size > 2 &&
+            kotlin.math.abs(first.x - last.x) < 0.0001f &&
+            kotlin.math.abs(first.y - last.y) < 0.0001f
+        val loopVertices = if (isClosedWithDuplicate) {
+            points.dropLast(1)
+        } else {
+            points
+        }
+        val vertices = Array(loopVertices.size) { i -> loopVertices[i] }
         shape.createLoop(vertices, vertices.size)
         body.createFixture(
             FixtureDef().apply {
@@ -351,7 +360,6 @@ class GameWorld(
         addRockAt(0.66f, 0.28f, 0.34f)
         addRockAt(0.40f, 0.76f, 0.28f)
 
-        val bumpsCenter = pointAtDistance(trackLength * 0.56f)
         repeat(6) { i ->
             val offset = if (i % 2 == 0) 0.55f else -0.55f
             val point = pointAtDistance(trackLength * (0.56f + i * 0.02f))
