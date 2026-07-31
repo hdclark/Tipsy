@@ -138,7 +138,7 @@ class GameWorld(
 
     private val centerLine = buildCenterLine(widthMeters, heightMeters)
     private val trackHalfWidths = FloatArray(centerLine.size) { i ->
-        0.8f + if (i % 4 == 0) 0.18f else if (i % 5 == 0) -0.16f else 0f
+        1.1f + if (i % 4 == 0) 0.18f else if (i % 5 == 0) -0.16f else 0f
     }
     private val outerLoop = offsetLoop(centerLine, trackHalfWidths, +1f)
     private val innerLoop = offsetLoop(centerLine, trackHalfWidths, -1f)
@@ -179,7 +179,8 @@ class GameWorld(
                 val manifold = WorldManifold()
                 contact.getWorldManifold(manifold)
                 val impactPoint = manifold.points[0]
-                val text = if ((signalCounter++ % 2) == 0) "oof!" else "ow!"
+                val textList = listOf("oof!", "ow!", "ouch!", "zounds!", "bang!", "ting!", "wut!", "dang!", "zoinks!", "toasty!")
+                val text = textList[signalCounter++ % textList.size]
                 activeSignals.add(FloatingSignal(text, impactPoint.clone(), 0.9f))
             }
         })
@@ -356,12 +357,23 @@ class GameWorld(
     }
 
     private fun buildFeatures() {
-        addRockAt(0.17f, 0.32f, 0.36f)
-        addRockAt(0.66f, 0.28f, 0.34f)
-        addRockAt(0.40f, 0.76f, 0.28f)
+        val random = Random(seed)
+
+        repeat(3) {
+            val dist = random.nextFloat() * trackLength
+            val center = pointAtDistance(dist)
+            val tangent = tangentAtDistance(dist)
+            val normal = Vec2(-tangent.y, tangent.x)
+            val side = if (random.nextBoolean()) 1f else -1f
+            val offset = 1.15f + random.nextFloat() * 0.4f
+            val pos = center.add(normal.mul(side * offset))
+            val radius = 0.28f + random.nextFloat() * 0.1f
+            addStaticCircle(pos, radius)
+            rocks.add(pos to radius)
+        }
 
         repeat(6) { i ->
-            val offset = if (i % 2 == 0) 0.55f else -0.55f
+            val offset = if (i % 2 == 0) 0.65f else -0.65f
             val point = pointAtDistance(trackLength * (0.56f + i * 0.02f))
             val tangent = tangentAtDistance(trackLength * (0.56f + i * 0.02f))
             val normal = Vec2(-tangent.y, tangent.x)
@@ -373,18 +385,19 @@ class GameWorld(
         val chuteA = pointAtDistance(trackLength * 0.82f)
         val chuteTangent = tangentAtDistance(trackLength * 0.82f)
         val chuteNormal = Vec2(-chuteTangent.y, chuteTangent.x)
-        val chuteLeft = chuteA.add(chuteNormal.mul(0.64f))
-        val chuteRight = chuteA.sub(chuteNormal.mul(0.64f))
+        val chuteLeft = chuteA.add(chuteNormal.mul(0.85f))
+        val chuteRight = chuteA.sub(chuteNormal.mul(0.85f))
         addStaticCircle(chuteLeft, 0.24f)
         addStaticCircle(chuteRight, 0.24f)
 
         val hsCenter = pointAtDistance(trackLength * 0.31f)
         val hsTan = tangentAtDistance(trackLength * 0.31f)
         val hsNorm = Vec2(-hsTan.y, hsTan.x)
-        val p1 = hsCenter.add(hsNorm.mul(0.7f)).sub(hsTan.mul(0.8f))
-        val p2 = hsCenter.add(hsNorm.mul(0.7f)).add(hsTan.mul(0.8f))
-        val p3 = hsCenter.sub(hsNorm.mul(0.7f)).add(hsTan.mul(0.8f))
-        val p4 = hsCenter.sub(hsNorm.mul(0.7f)).sub(hsTan.mul(0.8f))
+        val side = if (random.nextBoolean()) 1.0f else -1.0f
+        val p1 = hsCenter.add(hsNorm.mul(side * 1.0f)).sub(hsTan.mul(0.6f))
+        val p2 = hsCenter.add(hsNorm.mul(side * 1.0f)).add(hsTan.mul(0.6f))
+        val p3 = hsCenter.add(hsNorm.mul(side * 0.1f)).add(hsTan.mul(0.6f))
+        val p4 = hsCenter.add(hsNorm.mul(side * 0.1f)).sub(hsTan.mul(0.6f))
         addStaticEdge(p1, p2)
         addStaticEdge(p2, p3)
         addStaticEdge(p3, p4)
@@ -480,14 +493,17 @@ class GameWorld(
     }
 
     private fun buildCenterLine(width: Float, height: Float): List<Vec2> {
-        val points = listOf(
-            Vec2(0.10f, 0.24f), Vec2(0.26f, 0.12f), Vec2(0.47f, 0.20f), Vec2(0.66f, 0.11f),
-            Vec2(0.86f, 0.21f), Vec2(0.89f, 0.40f), Vec2(0.78f, 0.52f), Vec2(0.93f, 0.74f),
-            Vec2(0.74f, 0.88f), Vec2(0.56f, 0.76f), Vec2(0.38f, 0.90f), Vec2(0.22f, 0.78f),
-            Vec2(0.09f, 0.64f), Vec2(0.18f, 0.50f), Vec2(0.06f, 0.34f)
-        )
-        val scaled = points.map { Vec2(it.x * width, it.y * height) }
-        return scaled + scaled.first().clone()
+        val random = Random(seed)
+        val numPoints = 15
+        val points = mutableListOf<Vec2>()
+        for (i in 0 until numPoints) {
+            val angle = 2.0 * Math.PI * i / numPoints
+            val radius = 0.28 + random.nextDouble() * 0.08
+            val x = 0.5 + Math.cos(angle) * radius
+            val y = 0.5 + Math.sin(angle) * radius
+            points.add(Vec2((x * width).toFloat(), (y * height).toFloat()))
+        }
+        return points + points.first().clone()
     }
 
     private fun offsetLoop(base: List<Vec2>, halfWidths: FloatArray, side: Float): List<Vec2> {
@@ -500,7 +516,7 @@ class GameWorld(
             val tangent = next.sub(prev)
             val tangentLen = max(0.0001f, tangent.length())
             val normal = Vec2(-tangent.y / tangentLen, tangent.x / tangentLen)
-            val width = max(0.55f, halfWidths[i])
+            val width = max(0.9f, halfWidths[i])
             offset.add(current.add(normal.mul(width * side)))
         }
         return offset + offset.first().clone()

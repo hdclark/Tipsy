@@ -35,6 +35,12 @@ class TipsyGameView(context: Context) : View(context), SensorEventListener {
 
     private var lastFrameNanos = System.nanoTime()
 
+    private val buttonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(40, 150, 80)
+        style = Paint.Style.FILL
+    }
+    private val buttonBounds = android.graphics.RectF()
+
     private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(36, 42, 52)
         style = Paint.Style.STROKE
@@ -74,27 +80,7 @@ class TipsyGameView(context: Context) : View(context), SensorEventListener {
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        if (w <= 0 || h <= 0) return
-        pxPerMeter = min(w, h) / 12f
-        runCatching {
-            GameWorld(
-                widthMeters = w / pxPerMeter,
-                heightMeters = h / pxPerMeter,
-                seed = 20260731
-            ) { entry ->
-                runCatching {
-                    leaderboardStore.append(entry)
-                    history = leaderboardStore.loadHistory()
-                }.onFailure { reportError("Leaderboard save failed", it) }
-            }
-        }.onSuccess {
-            world = it
-            fatalErrorMessage = null
-        }.onFailure {
-            world = null
-            fatalErrorMessage = "Game failed to initialize. Please restart and report this issue."
-            reportError("Game initialization failed", it)
-        }
+        resetWorld(System.currentTimeMillis().toInt())
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -162,6 +148,16 @@ class TipsyGameView(context: Context) : View(context), SensorEventListener {
             }
 
             drawHud(canvas, state)
+
+            // Draw reset button in center
+            val cx = width / 2f
+            val cy = height / 2f
+            buttonBounds.set(cx - 80f, cy - 40f, cx + 80f, cy + 40f)
+            canvas.drawRoundRect(buttonBounds, 16f, 16f, buttonPaint)
+            textPaint.textSize = 28f
+            val tw = textPaint.measureText("RESET")
+            canvas.drawText("RESET", cx - tw / 2f, cy + 10f, textPaint)
+
             postInvalidateOnAnimation()
         }
     }
@@ -169,12 +165,50 @@ class TipsyGameView(context: Context) : View(context), SensorEventListener {
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val game = world ?: return false
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+            MotionEvent.ACTION_DOWN -> {
+                if (buttonBounds.contains(event.x, event.y)) {
+                    resetWorld(System.currentTimeMillis().toInt())
+                    return true
+                }
                 game.applyProdImpulse(event.x / pxPerMeter, event.y / pxPerMeter)
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (!buttonBounds.contains(event.x, event.y)) {
+                    game.applyProdImpulse(event.x / pxPerMeter, event.y / pxPerMeter)
+                }
                 return true
             }
         }
         return super.onTouchEvent(event)
+    }
+
+    private fun resetWorld(seed: Int) {
+        val w = width
+        val h = height
+        if (w <= 0 || h <= 0) return
+        pxPerMeter = min(w, h) / 12f
+        runCatching {
+            GameWorld(
+                widthMeters = w / pxPerMeter,
+                heightMeters = h / pxPerMeter,
+                seed = seed
+            ) { entry ->
+                runCatching {
+                    leaderboardStore.append(entry)
+                    history = leaderboardStore.loadHistory()
+                }.onFailure { reportError("Leaderboard save failed", it) }
+            }
+        }.onSuccess {
+            world = it
+            fatalErrorMessage = null
+            invalidate()
+        }.onFailure {
+            world = null
+            fatalErrorMessage = "Game failed to initialize. Please restart and report this issue."
+            reportError("Game initialization failed", it)
+            invalidate()
+        }
     }
 
     override fun onSensorChanged(event: SensorEvent) {
